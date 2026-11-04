@@ -1,0 +1,1196 @@
+from ultralytics import YOLO                                            #تحميل صنف YOLO لتشغيل نماذج الرؤية الحاسوبية.
+import cv2                                                              #قراءة الصور والفيديو والكاميرا وعرض النتائج.
+import os                                                               #إدارة الملفات والمجلدات والمسارات.
+import time                                                             #حساب الزمن وإنشاء أسماء ملفات فريدة.
+import socket                                                           #فحص الاتصال بعنوان كاميرا الشبكة.
+from urllib.parse import urlparse                                       #تحليل عنوان البث واستخراج المضيف والمنفذ.
+import tkinter as tk                                                    #إنشاء الواجهة الرسومية.
+from tkinter import simpledialog, messagebox, filedialog                            #نوافذ إدخال العدد ورسائل التنبيه والخطأ.
+from PIL import Image, ImageTk, ImageOps, ImageDraw                    #تحميل صورة الملف الشخصي وتحجيمها وعرضها داخل Tkinter.
+
+# ================================ SETTINGS ================================
+APP_DIR = os.path.dirname(os.path.abspath(__file__))                    #مجلد البرنامج الذي يحتوي صور الواجهة.
+BASE_DIR = r"D:\Day 6" if os.path.isdir(r"D:\Day 6") else APP_DIR  #استخدام مجلد المشروع المعروف أو مجلد البرنامج كبديل.
+PROFILE_DARK = os.path.join(APP_DIR, "nexus_profile_dark.png")          #الصورة الملائمة للوضع الليلي.
+PROFILE_LIGHT = os.path.join(APP_DIR, "nexus_profile_light.png")        #الصورة الملائمة للوضع النهاري.
+VIDEO = os.path.join(BASE_DIR, "run.mp4")                               #الفيديو المستخدم في التقسيم والكشف والتتبع.
+VID=os.path.join(BASE_DIR, "people.mp4") 
+IMAGE = os.path.join(BASE_DIR, "2008_000562.jpg")                       #الصورة المستخدمة في مهام YOLO الثابتة.
+READ_IMAGE = os.path.join(BASE_DIR, "kids.webp")                        #الصورة المستخدمة في أداة القراءة العادية.
+IP_CAMERA = "http://192.168.147.210:5555/video"                         #عنوان بث كاميرا IP.
+WEBCAM = 0                                                              #رقم كاميرا الحاسوب الافتراضي.
+IMG_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".webp")                    #امتدادات الصور المدعومة.
+VID_EXT = (".mp4", ".avi", ".mov", ".mkv", ".webm")                     #امتدادات الفيديو المدعومة.
+
+# ============================ VIDEO STUDIO OPTIONS ============================
+# أسماء الفيديوهات المعروفة؛ سيُبحث أيضًا عن بقية ملفات الفيديو داخل BASE_DIR.
+VIDEO_CHOICES = (
+    "video.mp4",
+    "Street, Walk, Urban. Free Stock Video.mp4",
+    "talking.mp4",
+    "run.mp4",
+    "people.mp4",
+    "Car, Road, Transportation. Free Stock Video.mp4",
+    "Charlie Chaplin - Kid Auto Races at Veni... - Stock Video.mp4",
+)
+
+# نماذج الفيديو المتوفرة لدى المستخدم.
+VIDEO_MODELS = (
+    "yolov8x.pt",
+    "yolov8n-cls.pt",
+    "yolo11n-pose.pt",
+    "yolo11n-seg.pt",
+    "yolo26n.pt",
+    "yolov8n.pt",
+    "yolo11n-obb.pt",
+    "yolo11n-cls.pt",
+    "yolo11n.pt",
+)
+
+# العمليات المتاحة في استوديو تحليل الفيديو.
+VIDEO_MODES = {
+    "detect": ("OBJECT DETECTION", "كشف الأجسام"),
+    "segment": ("INSTANCE SEGMENTATION", "تقسيم الأجسام"),
+    "classify": ("VIDEO CLASSIFICATION", "تصنيف إطارات الفيديو"),
+    "track": ("MULTI-OBJECT TRACKING", "تتبع الأجسام"),
+    "pose": ("POSE ESTIMATION", "تقدير وضعية الجسم"),
+    "obb": ("ORIENTED BOX DETECTION", "الكشف بالمربعات الموجهة"),
+}
+
+# تحديد النماذج المتوافقة مع كل عملية لتجنب تشغيل نموذج من نوع غير مناسب.
+VIDEO_COMPATIBLE_MODELS = {
+    "detect": {"yolov8x.pt", "yolo26n.pt", "yolov8n.pt", "yolo11n.pt"},
+    "segment": {"yolo11n-seg.pt"},
+    "classify": {"yolov8n-cls.pt", "yolo11n-cls.pt"},
+    "track": {"yolov8x.pt", "yolo26n.pt", "yolov8n.pt", "yolo11n.pt"},
+    "pose": {"yolo11n-pose.pt"},
+    "obb": {"yolo11n-obb.pt"},
+}
+
+# النموذج الافتراضي المقترح لكل عملية.
+VIDEO_DEFAULT_MODELS = {
+    "detect": "yolov8n.pt",
+    "segment": "yolo11n-seg.pt",
+    "classify": "yolov8n-cls.pt",
+    "track": "yolo26n.pt",
+    "pose": "yolo11n-pose.pt",
+    "obb": "yolo11n-obb.pt",
+}
+
+CACHE = {}                                                              #حفظ النماذج المحملة لتجنب إعادة تحميلها.
+
+MODELS = {                                                              #اسم النموذج الأساسي والاحتياطي لكل مهمة.%%%%%%
+    "detect": (os.path.join(BASE_DIR, "yolov8n.pt"), "yolov8n.pt"),
+    "segment": (os.path.join(BASE_DIR, "yolo11n-seg.pt"), "yolov8n-seg.pt"),
+    "classify": (os.path.join(BASE_DIR, "yolov8n-cls.pt"), "yolov8n-cls.pt"),
+    "track": (os.path.join(BASE_DIR, "yolo26n.pt"), "yolo26n.pt"),
+    "ip_detect": (os.path.join(BASE_DIR, "yolo26n.pt"), "yolov8n.pt"),
+}
+
+TASKS = {                                                               #اسم الزر والأيقونة والوصف الظاهر في الواجهة.
+    "seg": ("Video Segmentation", "◩", "VIDEO SEGMENTATION"),
+    "segimg": ("Image Segmentation", "▧", "IMAGE MASKS"),
+    "det": ("Image Detection", "⌕", "IMAGE DETECTION"),
+    "detvid": ("Video Detection", "▶", "VIDEO DETECTION"),
+    "str": ("IP Camera Detection", "⌁", "NETWORK STREAM"),
+    "cls": ("Image Classification", "◈", "IMAGE CLASSIFICATION"),
+    "trk": ("Video Tracking", "◎", "OBJECT TRACKING"),
+    "trkstr": ("IP Camera Tracking", "⟲", "NETWORK TRACKING"),
+    "livedet": ("Live Detection", "◉", "LIVE DETECTION"),
+    "liveseg": ("Live Segmentation", "▦", "LIVE SEGMENTATION"),
+    "livetrk": ("Live Tracking", "⟳", "LIVE TRACKING"),
+    "livecls": ("Live Classification", "◇", "LIVE CLASSIFICATION"),
+    "img": ("Read Image", "▧", "IMAGE VIEWER"),
+    "web": ("Capture Webcam Frames", "◉", "CAMERA FRAMES"),
+    "ext": ("Extract Video Frames", "▤", "VIDEO FRAMES"),
+    "photo": ("Take Photo", "◎", "SINGLE PHOTO"),
+    "rec": ("Record Video", "●", "VIDEO RECORDER"),
+    "gal": ("Image Gallery", "▦", "IMAGE GALLERY"),
+    "vidstudio": ("Video Analysis Studio", "▣", "CHOOSE VIDEO + MODEL"),
+}
+
+SECTIONS = (                                                            #ترتيب المهام داخل مجموعات الواجهة.
+    ("01  /  AI ANALYSIS CORE", ("seg", "segimg", "det", "detvid", "str", "cls", "trk", "trkstr")),
+    ("02  /  REAL-TIME NEURAL FEED", ("livedet", "liveseg", "livetrk", "livecls")),
+    ("03  /  CAPTURE LAB", ("img", "web", "ext", "photo")),
+    ("04  /  RECORDING STUDIO", ("rec",)),
+    ("05  /  VISUAL ARCHIVE", ("gal",)),
+    ("06  /  VIDEO ANALYSIS STUDIO", ("vidstudio",)),
+)
+
+AI_TASKS = {                                                            #نوع المهمة ومصدرها ومفتاح النموذج المناسب.
+    "seg": ("segment", VID , "segment"),
+    "segimg": ("segment", IMAGE, "segment"),
+    "det": ("detect", IMAGE, "detect"),
+    "detvid": ("detect", VIDEO, "detect"),
+    "str": ("detect", IP_CAMERA, "ip_detect"),
+    "cls": ("classify", IMAGE, "classify"),
+    "trk": ("track", VIDEO, "track"),
+    "trkstr": ("track", IP_CAMERA, "track"),
+}
+LIVE_TASKS = {                                                          #ربط أزرار الكاميرا المباشرة بنوع YOLO.
+    "livedet": "detect", "liveseg": "segment",
+    "livetrk": "track", "livecls": "classify",
+}
+
+# ================================ AI ENGINE ================================
+def get_model(mode):
+    name, fallback = MODELS[mode]                                       #استرجاع النموذج الأساسي والاحتياطي.
+    paths = tuple(dict.fromkeys(os.path.basename(p) if os.path.isabs(p) and not os.path.isfile(p) else p
+                                for p in (name, fallback)))             #تجنب تكرار المحاولة بالاسم نفسه.
+    for path in paths:                                                  #محاولة الأساسي ثم البديل عند الفشل.
+        if path in CACHE:
+            return CACHE[path]                                          #إعادة استخدام النموذج المحمل مسبقًا.
+        try:
+            model = YOLO(path)                                          #تحميل النموذج من الملف أو من مصدر المكتبة عند توفره.
+            CACHE[path] = model                                         #تخزين النموذج لتسريع المهام اللاحقة.
+            return model
+        except Exception as exc:
+            print(f"[Model error] {path}: {type(exc).__name__}: {exc}")
+    raise RuntimeError(f"Could not load model {name} or fallback {fallback}.")
+
+
+def load_model_file(path):
+    """تحميل ملف أوزان محدد من BASE_DIR أو من المسار الذي اختاره المستخدم."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if path in CACHE:
+        return CACHE[path]
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Model file not found: {path}")
+    model = YOLO(path)
+    CACHE[path] = model
+    return model
+
+
+def stream_ok(url, timeout=4):
+    try:
+        parsed = urlparse(url)                                          #تقسيم عنوان البث إلى بروتوكول ومضيف ومنفذ.
+        if not parsed.hostname:
+            return False, "Invalid stream URL"
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 5555)
+        with socket.create_connection((parsed.hostname, port), timeout=timeout):
+            pass                                                        #نجاح الاتصال يعني أن المضيف والمنفذ قابلان للوصول فقط.
+        return True, None
+    except (OSError, ValueError) as exc:
+        return False, str(exc)                                          #إعادة تفاصيل خطأ الاتصال بدل إيقاف البرنامج.
+
+
+def infer(model, mode, frame, conf=None):
+    if mode == "track":                                                 #التتبع يحافظ على معرفات الأجسام بين الإطارات.
+        options = {"persist": True, "tracker": "bytetrack.yaml", "verbose": False}
+        if conf is not None:
+            options["conf"] = conf                                      #الثقة تخصص للكاميرا المباشرة فقط.
+        result = model.track(frame, **options)[0]
+    elif mode == "classify":                                            #التصنيف لا يحتاج إلى عتبة كشف الأجسام.
+        result = model(frame, verbose=False)[0]
+    elif conf is None:
+        result = model(frame, verbose=False)[0]                         #الحفاظ على العتبة الافتراضية للملفات.
+    else:
+        result = model(frame, conf=conf, verbose=False)[0]
+    view = result.plot()                                                #رسم مربعات الكشف أو أقنعة التقسيم أو التتبع.
+    if mode == "classify" and result.probs is not None:
+        p = result.probs
+        text = f"{model.names[p.top1]} : {p.top1conf.item():.2f}"
+        cv2.putText(view, text, (12, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    return result, view
+
+
+def wait_q(window):
+    try:
+        while cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) >= 1:
+            if cv2.waitKey(100) & 0xFF == ord("q"):
+                break                                                   #الخروج من نافذة OpenCV عند الضغط على q.
+    except cv2.error:
+        pass                                                            #تجاوز خطأ النافذة إذا أُغلقت يدويًا.
+    finally:
+        cv2.destroyAllWindows()                                         #إغلاق نوافذ OpenCV بعد انتهاء العرض.
+
+
+def show_video(source, mode, conf=None, model_key=None, live=False, model_path=None):
+    url = isinstance(source, str) and source.lower().startswith(("http://", "https://"))
+    cap = cv2.VideoCapture(source)                                      #فتح ملف الفيديو أو بث الشبكة أو الكاميرا.
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Could not open video or camera source: {source}")
+    if url:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)                             #محاولة تقليل تأخر الإطارات في بث الشبكة.
+    window = f"{'LIVE' if live else 'YOLO'} / {mode.upper()}  —  q: RETURN"
+    frames, start, failures = 0, time.time(), 0
+    try:
+        model = load_model_file(model_path) if model_path else get_model(model_key or mode)  # تحميل النموذج المحدد أو الافتراضي.
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)                      #جعل نافذة النتائج قابلة لتغيير الحجم.
+        while True:
+            ok, frame = cap.read()                                      #قراءة الإطار التالي من المصدر.
+            if not ok:
+                failures += 1
+                if url and failures < 10:
+                    time.sleep(0.1)
+                    continue                                            #محاولة استعادة القراءة مؤقتًا لبث الشبكة.
+                print("End of video or unable to read another frame.")
+                break
+            failures = 0
+            _, view = infer(model, mode, frame, conf)
+            frames += 1
+            if live:
+                elapsed = time.time() - start
+                fps = frames / elapsed if elapsed > 0 else 0
+                cv2.putText(view, f"FPS: {fps:.1f}", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.imshow(window, view)                                    #عرض الإطار بعد تحليل YOLO.
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        cap.release()                                                   #إطلاق الكاميرا أو ملف الفيديو.
+        cv2.destroyAllWindows()                                         #إغلاق نوافذ العرض دائمًا.
+    print(f"Task finished: {frames} frame(s).")
+
+
+def run_yolo(mode, source, conf=None, model_key=None):
+    url = source.lower().startswith(("http://", "https://"))
+    path = urlparse(source).path if url else source
+    ext = os.path.splitext(path)[1].lower()                             #تحديد امتداد الملف أو المسار الموجود في عنوان URL.
+    image, video = ext in IMG_EXT, url or ext in VID_EXT
+    if not url and not os.path.isfile(source):
+        raise FileNotFoundError(f"File not found: {source}")
+    if mode == "classify" and not image:
+        raise ValueError("Classification requires a still image.")
+    if mode == "track" and not video:
+        raise ValueError("Tracking requires a video file or live stream.")
+    if mode in ("detect", "segment") and not (image or video):
+        raise ValueError(f"Unsupported source for {mode}: {source}")
+    if url:
+        ok, error = stream_ok(source)                                   #فحص أولي لاتصال كاميرا IP.
+        if not ok:
+            raise ConnectionError(f"IP camera is not reachable: {error}")
+    if video:
+        show_video(source, mode, conf, model_key)                       #استخدام الحلقة المشتركة لمعالجة إطارات الفيديو.
+        return
+    model = get_model(model_key or mode)                                #تحميل النموذج للصور الثابتة.
+    result = (model(source, verbose=False)[0] if mode == "classify" or conf is None
+              else model(source, conf=conf, verbose=False)[0])
+    if mode == "segment":
+        masks = len(result.masks) if result.masks is not None else 0
+        print(f"Detected object masks: {masks}")
+    view = result.plot()                                                #رسم النتيجة على الصورة.
+    if mode == "classify" and result.probs is not None:
+        p = result.probs
+        label = f"{model.names[p.top1]} ({p.top1conf.item():.2f})"
+        view = cv2.imread(source)                                       #استخدام الصورة الأصلية لعرض اسم فئة التصنيف.
+        cv2.putText(view, label, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        cv2.imwrite("output_yolo_classification.jpg", view)
+        print(f"Class: {model.names[p.top1]} | Confidence: {p.top1conf.item():.2f}")
+    window = f"YOLO / {mode.upper()}  —  q: RETURN"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    cv2.imshow(window, view)
+    wait_q(window)
+
+# =============================== MEDIA TOOLS ===============================
+def read_image(path, output="output_kids_image.jpg"):
+    image = cv2.imread(path)                                            #قراءة صورة عادية دون تشغيل نموذج ذكاء اصطناعي.
+    if image is None:
+        raise FileNotFoundError(f"Could not read image: {path}")
+    if cv2.imwrite(output, image):
+        print(f"Saved: {os.path.abspath(output)}")
+    cv2.namedWindow("Image Viewer", cv2.WINDOW_NORMAL)
+    cv2.imshow("Image Viewer", image)
+    wait_q("Image Viewer")
+
+
+def save_frames(source, count=10, prefix="output_frame", preview=False):
+    cap = cv2.VideoCapture(source)                                      #المصدر يمكن أن يكون كاميرا أو ملف فيديو.
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Could not open source: {source}")
+    saved = 0
+    try:
+        while saved < count:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            saved += 1
+            name = f"{prefix}_{saved}.jpg"
+            if not cv2.imwrite(name, frame):
+                print(f"Could not save image: {name}")
+            if preview:
+                view = frame.copy()
+                cv2.putText(view, f"CAPTURED {saved}/{count}  |  q: STOP", (12, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.imshow("Camera Capture", view)
+                if cv2.waitKey(100) & 0xFF == ord("q"):
+                    break
+    finally:
+        cap.release()                                                   #تحرير الكاميرا أو الفيديو بعد الالتقاط.
+        if preview:
+            cv2.destroyAllWindows()
+    print(f"Captured {saved} frame(s).")
+
+
+def take_photo(camera=WEBCAM):
+    cap = cv2.VideoCapture(camera)                                      #فتح الكاميرا لالتقاط صورة واحدة.
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Could not open webcam index {camera}.")
+    try:
+        ok, frame = cap.read()
+    finally:
+        cap.release()
+    if not ok:
+        raise RuntimeError("Could not capture a webcam photo.")
+    name = f"photo_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+    if not cv2.imwrite(name, frame):
+        raise RuntimeError(f"Could not save image: {name}")
+    cv2.putText(frame, f"SAVED: {name}", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.imshow("Single Photo  —  q: RETURN", frame)
+    wait_q("Single Photo  —  q: RETURN")
+
+
+def record_video(seconds=10, camera=WEBCAM):
+    cap = cv2.VideoCapture(camera)                                      #فتح مصدر الكاميرا للتسجيل.
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Could not open webcam index {camera}.")
+    size = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640,
+            int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480)
+    name = f"recording_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
+    writer = cv2.VideoWriter(name, cv2.VideoWriter_fourcc(*"mp4v"), 20.0, size)
+    if not writer.isOpened():
+        cap.release()
+        writer.release()
+        raise RuntimeError(f"Could not create video file: {name}")
+    start = time.time()
+    try:
+        while time.time() - start < seconds:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            left = max(0, seconds - (time.time() - start))
+            view = frame.copy()
+            cv2.putText(view, f"REC  {left:.0f}s  |  q: STOP", (12, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            writer.write(frame)                                         #حفظ الإطار الأصلي دون نص المعاينة.
+            cv2.imshow("Video Recorder", view)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        writer.release()                                                #إنهاء كتابة ملف الفيديو بصورة سليمة.
+        cap.release()
+        cv2.destroyAllWindows()
+    print(f"Recording saved: {os.path.abspath(name)}")
+
+
+def gallery(folder="."):
+    files = sorted(name for name in os.listdir(folder)
+                   if name.lower().startswith(("output", "photo_", "recording_"))
+                   and name.lower().endswith(IMG_EXT))                  #تجميع الصور الناتجة داخل معرض واحد.
+    if not files:
+        messagebox.showinfo("Gallery", "No saved images were found in the current folder.")
+        return
+    index, window = 0, "Gallery  —  A/D: NAVIGATE  |  Q: EXIT"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    try:
+        while files:
+            image = cv2.imread(os.path.join(folder, files[index]))
+            if image is None:
+                files.pop(index)
+                if files:
+                    index %= len(files)
+                continue
+            cv2.putText(image, f"{index + 1}/{len(files)}  {files[index]}  (A/D/Q)",
+                        (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            cv2.imshow(window, image)
+            key = cv2.waitKey(0) & 0xFF
+            if key in (ord("q"), 27):
+                break
+            if key in (ord("d"), ord("n"), 83):
+                index = (index + 1) % len(files)
+            elif key in (ord("a"), ord("p"), 81):
+                index = (index - 1) % len(files)
+    finally:
+        cv2.destroyAllWindows()
+
+# ================================ TASK ROUTER ================================
+def execute_task(key, camera, conf, count=None):
+    if key == "vidstudio":
+        console_video_studio()
+    elif key in AI_TASKS:                                                 #تشغيل مهام YOLO على الصور أو الفيديو أو الشبكة.
+        mode, source, model_key = AI_TASKS[key]
+        run_yolo(mode, source, None, model_key)                         #مهام الملفات تحتفظ بالقيم الافتراضية الأصلية.
+    elif key in LIVE_TASKS:                                             #تشغيل نموذج YOLO مباشرةً على كاميرا الحاسوب.
+        show_video(camera, LIVE_TASKS[key], conf, live=True)
+    elif key == "img":
+        read_image(READ_IMAGE)
+    elif key == "web":
+        save_frames(camera, count, "output_webcam_frame", True)
+    elif key == "ext":
+        save_frames(VIDEO, count, "output_video_frame")
+    elif key == "photo":
+        take_photo(camera)
+    elif key == "rec":
+        record_video(count, camera)
+    elif key == "gal":
+        gallery()
+
+# ============================== THEME / UI ==============================
+THEMES = {                                                              #ثيم تقني باللون الأزرق للوضع الليلي والنهاري.
+    "dark": {
+        "bg": "#071321", "panel": "#0B1C2D", "card": "#10263B",
+        "hover": "#173650", "text": "#EAF7FF", "muted": "#91AFC4",
+        "line": "#244B66", "accent": "#24C8F4", "accent2": "#4B91C7",
+        "input": "#0A1928", "green": "#69E4B2",
+    },
+    "light": {
+        "bg": "#EAF3F9", "panel": "#FFFFFF", "card": "#F7FBFE",
+        "hover": "#DDECF6", "text": "#10283B", "muted": "#5F788D",
+        "line": "#C4D8E6", "accent": "#087FA8", "accent2": "#66B8D6",
+        "input": "#F4F9FC", "green": "#188653",
+    },
+}
+
+
+def rounded_points(x1, y1, x2, y2, radius=16):
+    r = min(radius, max(4, (y2 - y1) // 2))                             #تقريب زوايا بطاقات Canvas لمحاكاة الأزرار الدائرية.
+    return (x1+r, y1, x2-r, y1, x2, y1, x2, y1+r,
+            x2, y2-r, x2, y2, x2-r, y2, x1+r, y2,
+            x1, y2, x1, y2-r, x1, y1+r, x1, y1)
+
+
+class GlassButton(tk.Canvas):
+    def __init__(self, master, title, icon, subtitle, palette, command, compact=False, width=300, height=86):
+        super().__init__(master, width=width, height=height, bg=palette["bg"],
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.title, self.icon, self.subtitle = title, icon, subtitle
+        self.palette, self.command, self.compact = palette, command, compact
+        self.hovered = False
+        self.bind("<Configure>", lambda _event: self.draw())
+        self.bind("<Enter>", self._enter)                               #تأثير لوني عند مرور المؤشر فوق الزر.
+        self.bind("<Leave>", self._leave)
+        self.bind("<Button-1>", lambda _event: self.command())
+        self.draw()
+
+    def draw(self):
+        self.delete("all")                                              #إعادة رسم الزر بألوان الوضع الحالي.
+        w, h = max(20, self.winfo_width()), max(20, self.winfo_height())
+        p = self.palette
+        fill = p["hover"] if self.hovered else p["card"]
+        edge = p["accent"] if self.hovered else p["line"]
+        self.create_polygon(rounded_points(2, 2, w-2, h-2), smooth=True,
+                            fill=fill, outline=edge, width=1.4)
+        self.create_line(22, 4, max(22, w-22), 4, fill=p["accent2"], width=1)
+        if self.compact:
+            self.create_text(27, h/2, text=self.icon, fill=p["accent"],
+                             font=("Segoe UI Symbol", 20, "bold"))
+            self.create_text(52, h/2, text=self.title, anchor="w", fill=p["text"],
+                             font=("Segoe UI", 10, "bold"))
+        else:
+            self.create_text(33, h/2-3, text=self.icon, fill=p["accent"],
+                             font=("Segoe UI Symbol", 25, "bold"))
+            self.create_text(66, h/2-9, text=self.title, anchor="w", fill=p["text"],
+                             font=("Segoe UI", 11, "bold"))
+            self.create_text(67, h/2+14, text=self.subtitle, anchor="w", fill=p["muted"],
+                             font=("Consolas", 8))
+            self.create_text(w-25, h/2, text="↗", fill=p["accent2"], font=("Segoe UI", 15))
+
+    def _enter(self, _event):
+        self.hovered = True
+        self.draw()
+
+    def _leave(self, _event):
+        self.hovered = False
+        self.draw()
+
+
+class YoloControlPanel:
+    def __init__(self, root):
+        self.root = root                                                #حفظ النافذة الرئيسية داخل كائن لوحة التحكم.
+        self.theme = "dark"                                             #بدء التشغيل بالوضع الليلي.
+        self.camera = tk.IntVar(value=WEBCAM)                           #ربط رقم الكاميرا بعنصر الإعدادات.
+        self.conf = tk.DoubleVar(value=0.5)                             #قيمة عتبة الثقة المستخدمة في مهام YOLO.
+        self.status = "SYSTEM READY  /  SELECT A MODULE"
+        self.profile_photo_ref = None                                   #الاحتفاظ بمرجع الصورة كي لا تختفي من Tkinter.
+        self.about_photo_ref = None                                     #مرجع مستقل لصورة صفحة معلومات المشروع.
+        self.about_window = None                                        #منع فتح أكثر من نافذة تعريف بالمشروع.
+        self.main_shell = None
+        self.video_page = None
+        self.video_path_var = tk.StringVar(master=root, value="")
+        self.video_mode_var = tk.StringVar(master=root, value="detect")
+        self.video_model_var = tk.StringVar(master=root, value=VIDEO_DEFAULT_MODELS["detect"])
+        self.video_file_buttons = []
+        self.video_model_buttons = []
+        self.video_mode_buttons = []
+        self.video_source_key = None
+        root.title("NEXUS Vision Engine | YOLO Control Suite")
+        root.resizable(True, True)                                      #السماح بتغيير الحجم والتصغير والتكبير.
+        try:
+            root.state("zoomed")                                        #بدء البرنامج مكبّرًا إلى مساحة الشاشة.
+        except tk.TclError:
+            root.geometry("1400x900")                                   #حجم بديل إذا لم يدعم النظام حالة التكبير.
+        self.build_ui()
+        root.bind_all("<MouseWheel>", self.mousewheel)
+        root.bind_all("<Button-4>", lambda _e: self.scroll(-1))
+        root.bind_all("<Button-5>", lambda _e: self.scroll(1))
+        root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def build_ui(self):
+        for child in self.root.winfo_children():
+            child.destroy()                                             #إعادة بناء الواجهة نفسها عند تغيير الثيم.
+        p = THEMES[self.theme]
+        self.root.configure(bg=p["bg"])
+        shell = tk.Frame(self.root, bg=p["bg"])
+        self.main_shell = shell
+        shell.pack(fill="both", expand=True)
+        tk.Frame(shell, bg=p["accent"], height=3).pack(fill="x")        #خط مضيء أعلى الواجهة.
+        self.build_header(shell, p)
+        self.build_settings(shell, p)
+        self.build_workspace(shell, p)
+        self.build_footer(shell, p)
+
+    def _profile_image(self, path, size, roundness=14):
+        """تحميل صورة الواجهة وتحجيمها وإضافة زوايا مستديرة دون تغيير محتواها."""
+        if not os.path.isfile(path):
+            return None
+        image = Image.open(path).convert("RGB")
+        image = ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=(0.54, 0.52))
+        image = image.convert("RGBA")
+        shape = Image.new("L", size, 0)
+        ImageDraw.Draw(shape).rounded_rectangle((0, 0, size[0]-1, size[1]-1), radius=roundness, fill=255)
+        image.putalpha(shape)
+        return ImageTk.PhotoImage(image)
+
+    def build_header(self, parent, p):
+        head = tk.Frame(parent, bg=p["panel"], padx=18, pady=10)
+        head.pack(fill="x", padx=18, pady=(10, 5))
+        head.columnconfigure(1, weight=1)
+        path = PROFILE_DARK if self.theme == "dark" else PROFILE_LIGHT
+        self.profile_photo_ref = self._profile_image(path, (102, 88), 12)
+        if self.profile_photo_ref is not None:
+            profile = tk.Label(head, image=self.profile_photo_ref, bg=p["panel"],
+                               bd=0, cursor="hand2", highlightthickness=1,
+                               highlightbackground=p["line"])
+        else:
+            profile = tk.Label(head, text="NV", bg=p["card"], fg=p["accent"],
+                               font=("Consolas", 22, "bold"), padx=15, pady=8,
+                               cursor="hand2", highlightthickness=1, highlightbackground=p["line"])
+        profile.grid(row=0, column=0, rowspan=3, padx=(0, 16), sticky="ns")
+        profile.bind("<Button-1>", lambda _event: self.open_project_credits())
+        profile.bind("<Enter>", lambda _event: profile.configure(highlightbackground=p["accent"]))
+        profile.bind("<Leave>", lambda _event: profile.configure(highlightbackground=p["line"]))
+        tk.Label(head, text="NEXUS  /  VISION ENGINE", bg=p["panel"], fg=p["text"],
+                 font=("Segoe UI", 22, "bold"), anchor="w").grid(row=0, column=1, sticky="w")
+        tk.Label(head, text="COMPUTER VISION  •  NEURAL INFERENCE  •  REAL-TIME TRACKING",
+                 bg=p["panel"], fg=p["muted"], font=("Consolas", 9), anchor="w").grid(row=1, column=1, sticky="w", pady=(4, 0))
+        tk.Label(head, text="CLICK THE PORTRAIT TO VIEW PROJECT INFORMATION  ↗",
+                 bg=p["panel"], fg=p["accent"], font=("Consolas", 8, "bold"), anchor="w").grid(row=2, column=1, sticky="w", pady=(6, 0))
+        side = tk.Frame(head, bg=p["panel"])
+        side.grid(row=0, column=2, rowspan=3, padx=(15, 0), sticky="e")
+        tk.Label(side, text="●  SYSTEM ONLINE", bg=p["panel"], fg=p["green"],
+                 font=("Consolas", 9, "bold")).pack(anchor="e", pady=(0, 8))
+        tk.Label(side, text="18 MODULES  /  YOLO CORE", bg=p["panel"], fg=p["muted"],
+                 font=("Consolas", 8)).pack(anchor="e")
+
+    def open_project_credits(self):
+        """فتح صفحة مستقلة تعرض اسم المشروع وأسماء فريق العمل والإشراف."""
+        if self.about_window is not None and self.about_window.winfo_exists():
+            self.about_window.lift()
+            self.about_window.focus_force()
+            return
+        p = THEMES[self.theme]
+        win = tk.Toplevel(self.root)
+        self.about_window = win
+        win.title("Project Information | NEXUS Vision Engine")
+        win.configure(bg=p["bg"])
+        win.geometry("1120x760")
+        win.minsize(880, 640)
+        win.transient(self.root)
+        win.bind("<Escape>", lambda _event: win.destroy())
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        tk.Frame(win, bg=p["accent"], height=4).pack(fill="x")
+
+        top = tk.Frame(win, bg=p["panel"], padx=28, pady=17)
+        top.pack(fill="x", padx=22, pady=(18, 12))
+        tk.Label(top, text="NEXUS VISION ENGINE", bg=p["panel"], fg=p["text"],
+                 font=("Segoe UI", 24, "bold"), anchor="w").pack(anchor="w")
+        tk.Label(top, text="PROJECT PROFILE  /  ENGINEERING TEAM  /  SUPERVISION",
+                 bg=p["panel"], fg=p["accent"], font=("Consolas", 10, "bold"), anchor="w").pack(anchor="w", pady=(5, 0))
+
+        body = tk.Frame(win, bg=p["bg"])
+        body.pack(fill="both", expand=True, padx=22, pady=(0, 14))
+        body.columnconfigure(0, weight=4)
+        body.columnconfigure(1, weight=5)
+        body.rowconfigure(0, weight=1)
+
+        art = tk.Frame(body, bg=p["panel"], padx=10, pady=10,
+                       highlightbackground=p["line"], highlightthickness=1)
+        art.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        portrait_path = PROFILE_DARK if self.theme == "dark" else PROFILE_LIGHT
+        self.about_photo_ref = self._profile_image(portrait_path, (430, 450), 16)
+        if self.about_photo_ref is not None:
+            tk.Label(art, image=self.about_photo_ref, bg=p["panel"], bd=0).pack(fill="both", expand=True)
+        else:
+            tk.Label(art, text="NEXUS  /  VISION ENGINE", bg=p["panel"], fg=p["accent"],
+                     font=("Consolas", 20, "bold")).pack(fill="both", expand=True)
+        tk.Label(art, text="COMPUTER VISION  •  AI SYSTEMS", bg=p["panel"], fg=p["muted"],
+                 font=("Consolas", 8, "bold")).pack(fill="x", pady=(8, 2))
+
+        details = tk.Frame(body, bg=p["panel"], padx=26, pady=24,
+                           highlightbackground=p["line"], highlightthickness=1)
+        details.grid(row=0, column=1, sticky="nsew")
+        tk.Label(details, text="PROJECT TITLE", bg=p["panel"], fg=p["accent"],
+                 font=("Consolas", 9, "bold")).pack(anchor="w")
+        tk.Label(details, text="AI-Powered Computer Vision System Using YOLO",
+                 bg=p["panel"], fg=p["text"], font=("Segoe UI", 16, "bold"),
+                 justify="left", wraplength=500, anchor="w").pack(anchor="w", pady=(7, 13))
+        tk.Label(details, text="PROJECT SCOPE", bg=p["panel"], fg=p["accent"],
+                 font=("Consolas", 9, "bold")).pack(anchor="w")
+        tk.Label(details, text="Object Detection  •  Image Segmentation  •  Classification\nMulti-Object Tracking  •  Live Camera Analysis",
+                 bg=p["panel"], fg=p["muted"], font=("Segoe UI", 10), justify="left",
+                 wraplength=500, anchor="w").pack(anchor="w", pady=(7, 17))
+        tk.Frame(details, bg=p["line"], height=1).pack(fill="x", pady=(0, 15))
+        tk.Label(details, text="PREPARED BY", bg=p["panel"], fg=p["accent"],
+                 font=("Consolas", 9, "bold")).pack(anchor="w")
+        for name in ("Eng. Saad Ahmed Albohan", "Eng. Salman Al-Shami", "Eng. Mansour Sadiq Mansour"):
+            tk.Label(details, text="•  " + name, bg=p["panel"], fg=p["text"],
+                     font=("Segoe UI", 11), anchor="w").pack(anchor="w", pady=(7, 0))
+        tk.Frame(details, bg=p["line"], height=1).pack(fill="x", pady=(17, 14))
+        tk.Label(details, text="UNDER THE SUPERVISION OF", bg=p["panel"], fg=p["accent"],
+                 font=("Consolas", 9, "bold")).pack(anchor="w")
+        tk.Label(details, text="Eng. Taha Al-Shawash", bg=p["panel"], fg=p["text"],
+                 font=("Segoe UI", 12, "bold"), anchor="w").pack(anchor="w", pady=(7, 0))
+
+        foot = tk.Frame(win, bg=p["bg"], padx=22, pady=4)
+        foot.pack(fill="x", side="bottom", pady=(0, 14))
+        tk.Label(foot, text="NEXUS VISION ENGINE  /  ENGINEERING PROJECT", bg=p["bg"],
+                 fg=p["muted"], font=("Consolas", 8)).pack(side="left")
+        GlassButton(foot, "CLOSE PROJECT PAGE", "×", "", p, win.destroy,
+                    compact=True, width=205, height=42).pack(side="right")
+
+
+    def build_settings(self, parent, p):
+        bar = tk.Frame(parent, bg=p["panel"], padx=16, pady=10)
+        bar.pack(fill="x", padx=18, pady=(0, 8))
+        tk.Label(bar, text="CAMERA INDEX", bg=p["panel"], fg=p["muted"],
+                 font=("Consolas", 9, "bold")).pack(side="left", padx=(2, 8))
+        tk.Spinbox(bar, from_=0, to=8, width=4, textvariable=self.camera,
+                   bg=p["input"], fg=p["text"], insertbackground=p["text"],
+                   buttonbackground=p["card"], relief="flat", font=("Consolas", 11),
+                   highlightthickness=1, highlightbackground=p["line"]).pack(side="left", padx=(0, 22), ipady=5)
+        tk.Label(bar, text="CONFIDENCE", bg=p["panel"], fg=p["muted"],
+                 font=("Consolas", 9, "bold")).pack(side="left", padx=(0, 8))
+        tk.Scale(bar, from_=0.10, to=0.90, resolution=0.05, orient="horizontal",
+                 variable=self.conf, length=210, showvalue=True, digits=2,
+                 bg=p["panel"], fg=p["text"], troughcolor=p["card"],
+                 activebackground=p["accent"], highlightthickness=0, bd=0,
+                 font=("Consolas", 8)).pack(side="left", padx=(0, 12))
+        tk.Label(bar, text="LIVE CONFIDENCE", bg=p["panel"], fg=p["muted"],
+                 font=("Consolas", 8)).pack(side="left", padx=(0, 10))
+        icon, label = ("☾", "NIGHT MODE") if self.theme == "dark" else ("☀", "DAY MODE")
+        GlassButton(bar, label, icon, "", p, self.toggle_theme, compact=True,
+                    width=150, height=49).pack(side="right", padx=(8, 0))
+
+    # ============================ VIDEO STUDIO UI ============================
+    # كل عناصر الواجهة الجديدة لاختيار الفيديو والنموذج والعملية موجودة في هذا القسم.
+    def open_video_selector(self, source_key):
+        """عرض صفحة اختيار الفيديو داخل النافذة الرئيسية نفسها."""
+        self.video_source_key = source_key
+        initial_modes = {"seg": "segment", "detvid": "detect", "trk": "track", "vidstudio": "detect"}
+        mode = initial_modes.get(source_key, "detect")
+        self.video_mode_var.set(mode)
+        self.video_model_var.set(VIDEO_DEFAULT_MODELS[mode])
+        self.video_path_var.set("")
+
+        if self.main_shell is not None and self.main_shell.winfo_exists():
+            self.main_shell.pack_forget()
+        if self.video_page is not None and self.video_page.winfo_exists():
+            self.video_page.destroy()
+
+        p = THEMES[self.theme]
+        self.video_page = tk.Frame(self.root, bg=p["bg"])
+        self.video_page.pack(fill="both", expand=True)
+        self.build_video_selector(self.video_page, p)
+
+    def _video_catalog(self):
+        """إرجاع الفيديوهات المعلومة أولًا ثم أي ملفات فيديو أخرى داخل مجلد المشروع."""
+        catalog = []
+        seen = set()
+        try:
+            filenames = os.listdir(BASE_DIR)
+        except OSError:
+            filenames = []
+
+        for requested in VIDEO_CHOICES:
+            selected_path = os.path.join(BASE_DIR, requested)
+            display_name = requested
+            if not os.path.isfile(selected_path) and "..." in requested:
+                prefix = requested.split("...", 1)[0]
+                matches = [name for name in filenames
+                           if name.lower().startswith(prefix.lower())
+                           and os.path.splitext(name)[1].lower() in VID_EXT]
+                if matches:
+                    selected_path = os.path.join(BASE_DIR, sorted(matches)[0])
+            if os.path.isfile(selected_path):
+                key = os.path.normcase(os.path.abspath(selected_path))
+                if key not in seen:
+                    catalog.append((display_name, selected_path, True))
+                    seen.add(key)
+            else:
+                # إظهار الاسم المطلوب حتى لو لم يوجد، مع تعطيل تشغيله وإظهار المسار اليدوي كبديل.
+                catalog.append((display_name, selected_path, False))
+
+        for filename in sorted(filenames, key=str.lower):
+            if os.path.splitext(filename)[1].lower() not in VID_EXT:
+                continue
+            path = os.path.join(BASE_DIR, filename)
+            key = os.path.normcase(os.path.abspath(path))
+            if key not in seen:
+                catalog.append((filename, path, True))
+                seen.add(key)
+        return catalog
+
+    def build_video_selector(self, parent, p):
+        """بناء صفحة هندسية متناسقة مع ألوان الوضع الليلي/النهاري الحالية."""
+        parent.configure(bg=p["bg"])
+        tk.Frame(parent, bg=p["accent"], height=4).pack(fill="x")
+
+        header = tk.Frame(parent, bg=p["panel"], padx=24, pady=16)
+        header.pack(fill="x", padx=22, pady=(16, 10))
+        header.columnconfigure(0, weight=1)
+        tk.Label(header, text="NEXUS  /  VIDEO ANALYSIS STUDIO",
+                 bg=p["panel"], fg=p["text"],
+                 font=("Segoe UI", 21, "bold"), anchor="w").grid(row=0, column=0, sticky="w")
+        tk.Label(header,
+                 text="SELECT A VIDEO  •  CHOOSE THE AI MODEL  •  RUN INFERENCE",
+                 bg=p["panel"], fg=p["muted"],
+                 font=("Consolas", 9), anchor="w").grid(row=1, column=0, sticky="w", pady=(5, 0))
+        GlassButton(header, "BACK TO MAIN", "←", "RETURN TO DASHBOARD", p,
+                    self.return_to_main, compact=True, width=190, height=46).grid(row=0, column=1, rowspan=2, padx=(18, 0))
+
+        # منطقة المحتوى: قائمة الفيديوهات في اليسار، والنماذج في اليمين.
+        body = tk.Frame(parent, bg=p["bg"])
+        body.pack(fill="both", expand=True, padx=22, pady=(0, 8))
+        body.columnconfigure(0, weight=5, uniform="studio")
+        body.columnconfigure(1, weight=4, uniform="studio")
+        body.rowconfigure(0, weight=1)
+
+        videos_panel = tk.Frame(body, bg=p["panel"], padx=16, pady=14,
+                                highlightbackground=p["line"], highlightthickness=1)
+        videos_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        tk.Label(videos_panel, text="01  /  VIDEO LIBRARY", bg=p["panel"], fg=p["accent"],
+                 font=("Consolas", 11, "bold"), anchor="w").pack(fill="x")
+        tk.Label(videos_panel, text=f"Folder: {BASE_DIR}", bg=p["panel"], fg=p["muted"],
+                 font=("Consolas", 8), anchor="w").pack(fill="x", pady=(5, 10))
+
+        video_grid = tk.Frame(videos_panel, bg=p["panel"])
+        video_grid.pack(fill="both", expand=True)
+        for col in range(2):
+            video_grid.grid_columnconfigure(col, weight=1, uniform="video-buttons")
+        self.video_file_buttons = []
+        catalog = self._video_catalog()
+        for index, (display_name, full_path, exists) in enumerate(catalog):
+            label = display_name if len(display_name) <= 42 else display_name[:39] + "..."
+            if not exists:
+                label += "\n(FILE NOT FOUND)"
+            else:
+                label += "\nSELECT VIDEO"
+            button = tk.Button(
+                video_grid, text=label,
+                command=lambda path=full_path, valid=exists: self.select_video_file(path, valid),
+                bg=p["card"], fg=p["text"], activebackground=p["hover"],
+                activeforeground=p["text"], disabledforeground=p["muted"],
+                relief="flat", bd=0, highlightthickness=1,
+                highlightbackground=p["line"], highlightcolor=p["accent"],
+                cursor="hand2" if exists else "arrow",
+                font=("Segoe UI", 9, "bold"), wraplength=250,
+                padx=9, pady=9, justify="left", anchor="w"
+            )
+            button.grid(row=index // 2, column=index % 2, sticky="nsew", padx=4, pady=4)
+            self.video_file_buttons.append((full_path, button, exists))
+
+        models_panel = tk.Frame(body, bg=p["panel"], padx=16, pady=14,
+                                highlightbackground=p["line"], highlightthickness=1)
+        models_panel.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        tk.Label(models_panel, text="02  /  MODEL SELECTION", bg=p["panel"], fg=p["accent"],
+                 font=("Consolas", 11, "bold"), anchor="w").pack(fill="x")
+        tk.Label(models_panel, text="Choose a model file from your project folder.",
+                 bg=p["panel"], fg=p["muted"], font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(5, 10))
+        model_grid = tk.Frame(models_panel, bg=p["panel"])
+        model_grid.pack(fill="both", expand=True)
+        for col in range(2):
+            model_grid.grid_columnconfigure(col, weight=1, uniform="model-buttons")
+        self.video_model_buttons = []
+        for index, model_name in enumerate(VIDEO_MODELS):
+            model_path = os.path.join(BASE_DIR, model_name)
+            exists = os.path.isfile(model_path)
+            description = "MODEL READY" if exists else "FILE NOT FOUND"
+            button = tk.Button(
+                model_grid, text=f"{model_name}\n{description}",
+                command=lambda name=model_name: self.select_video_model(name),
+                bg=p["card"], fg=p["text"], activebackground=p["hover"],
+                activeforeground=p["text"], relief="flat", bd=0,
+                highlightthickness=1, highlightbackground=p["line"],
+                highlightcolor=p["accent"], cursor="hand2",
+                font=("Consolas", 9, "bold"), padx=8, pady=8, justify="left", anchor="w"
+            )
+            button.grid(row=index // 2, column=index % 2, sticky="nsew", padx=4, pady=4)
+            self.video_model_buttons.append((model_name, button, exists))
+
+        # شريط المسار اليدوي.
+        path_panel = tk.Frame(parent, bg=p["panel"], padx=18, pady=11)
+        path_panel.pack(fill="x", padx=22, pady=(0, 8))
+        tk.Label(path_panel, text="VIDEO PATH", bg=p["panel"], fg=p["accent"],
+                 font=("Consolas", 9, "bold")).pack(side="left", padx=(0, 10))
+        path_entry = tk.Entry(path_panel, textvariable=self.video_path_var,
+                              bg=p["input"], fg=p["text"], insertbackground=p["text"],
+                              relief="flat", bd=0, font=("Consolas", 9))
+        path_entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 8))
+        tk.Button(path_panel, text="BROWSE...", command=self.browse_video_file,
+                  bg=p["card"], fg=p["text"], activebackground=p["hover"],
+                  relief="flat", bd=0, cursor="hand2", padx=12, pady=7,
+                  font=("Consolas", 8, "bold")).pack(side="right")
+
+        # اختيار نوع المعالجة. النماذج غير المتوافقة ستُرفض قبل بدء المعالجة.
+        operation_panel = tk.Frame(parent, bg=p["bg"], padx=22)
+        operation_panel.pack(fill="x", pady=(0, 8))
+        tk.Label(operation_panel, text="03  /  ANALYSIS MODE", bg=p["bg"], fg=p["accent"],
+                 font=("Consolas", 9, "bold")).pack(anchor="w", pady=(0, 5))
+        mode_grid = tk.Frame(operation_panel, bg=p["bg"])
+        mode_grid.pack(fill="x")
+        self.video_mode_buttons = []
+        for index, (mode, (title, _arabic)) in enumerate(VIDEO_MODES.items()):
+            button = tk.Button(
+                mode_grid, text=title,
+                command=lambda selected=mode: self.select_video_mode(selected),
+                bg=p["card"], fg=p["text"], activebackground=p["hover"],
+                activeforeground=p["text"], relief="flat", bd=0,
+                highlightthickness=1, highlightbackground=p["line"],
+                highlightcolor=p["accent"], cursor="hand2",
+                font=("Consolas", 8, "bold"), padx=8, pady=8
+            )
+            button.pack(side="left", fill="x", expand=True, padx=3)
+            self.video_mode_buttons.append((mode, button))
+
+        footer = tk.Frame(parent, bg=p["bg"], padx=22, pady=8)
+        footer.pack(fill="x", side="bottom")
+        self.video_status_var = tk.StringVar(master=self.root, value="READY  /  SELECT A VIDEO, MODEL AND MODE")
+        tk.Label(footer, textvariable=self.video_status_var, bg=p["bg"], fg=p["muted"],
+                 font=("Consolas", 8, "bold"), anchor="w").pack(side="left", fill="x", expand=True)
+        GlassButton(footer, "RUN VIDEO ANALYSIS", "▶", "START INFERENCE", p,
+                    self.start_selected_video, compact=True, width=220, height=48).pack(side="right", padx=(8, 0))
+        self.refresh_video_selector_buttons()
+
+    def select_video_file(self, path, exists=True):
+        if not exists or not os.path.isfile(path):
+            messagebox.showwarning("Video not found", f"This video was not found:\n{path}\n\nType its full path or use BROWSE.", parent=self.root)
+            return
+        self.video_path_var.set(os.path.abspath(path))
+        if hasattr(self, "video_status_var"):
+            self.video_status_var.set(f"VIDEO SELECTED  /  {os.path.basename(path)}")
+        self.refresh_video_selector_buttons()
+
+    def browse_video_file(self):
+        path = filedialog.askopenfilename(
+            parent=self.root,
+            title="Choose a video",
+            initialdir=BASE_DIR,
+            filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv *.webm"), ("All files", "*.*")]
+        )
+        if path:
+            self.select_video_file(path, True)
+
+    def select_video_model(self, model_name):
+        self.video_model_var.set(model_name)
+        if hasattr(self, "video_status_var"):
+            self.video_status_var.set(f"MODEL SELECTED  /  {model_name}")
+        self.refresh_video_selector_buttons()
+
+    def select_video_mode(self, mode):
+        self.video_mode_var.set(mode)
+        current_model = self.video_model_var.get()
+        if current_model not in VIDEO_COMPATIBLE_MODELS[mode]:
+            self.video_model_var.set(VIDEO_DEFAULT_MODELS[mode])
+        if hasattr(self, "video_status_var"):
+            title = VIDEO_MODES[mode][0]
+            self.video_status_var.set(f"MODE SELECTED  /  {title}")
+        self.refresh_video_selector_buttons()
+
+    def refresh_video_selector_buttons(self):
+        if self.video_page is None or not self.video_page.winfo_exists():
+            return
+        p = THEMES[self.theme]
+        current_path = self.video_path_var.get().strip()
+        current_model = self.video_model_var.get()
+        current_mode = self.video_mode_var.get()
+        for path, button, exists in self.video_file_buttons:
+            selected = bool(current_path and os.path.normcase(os.path.abspath(current_path)) == os.path.normcase(os.path.abspath(path)))
+            button.configure(
+                bg=p["hover"] if selected else p["card"],
+                highlightbackground=p["accent"] if selected else p["line"],
+                highlightthickness=2 if selected else 1
+            )
+        for name, button, exists in self.video_model_buttons:
+            selected = name == current_model
+            compatible = name in VIDEO_COMPATIBLE_MODELS[current_mode]
+            button.configure(
+                bg=p["hover"] if selected else p["card"],
+                highlightbackground=p["accent"] if selected else p["line"],
+                highlightthickness=2 if selected else 1,
+                fg=p["text"] if compatible else p["muted"]
+            )
+        for mode, button in self.video_mode_buttons:
+            selected = mode == current_mode
+            button.configure(
+                bg=p["hover"] if selected else p["card"],
+                highlightbackground=p["accent"] if selected else p["line"],
+                highlightthickness=2 if selected else 1
+            )
+
+    def start_selected_video(self):
+        source = self.video_path_var.get().strip().strip('"')
+        model_name = self.video_model_var.get()
+        mode = self.video_mode_var.get()
+        if not source:
+            messagebox.showwarning("Choose a video", "Select a video button or enter its full path first.", parent=self.root)
+            return
+        if not (source.lower().startswith(("http://", "https://")) or os.path.isfile(os.path.expanduser(source))):
+            messagebox.showerror("Video path error", f"Video file not found:\n{source}", parent=self.root)
+            return
+        local_source = os.path.expanduser(source)
+        if not source.lower().startswith(("http://", "https://")) and os.path.splitext(local_source)[1].lower() not in VID_EXT:
+            messagebox.showerror("Unsupported file", f"The selected file is not a supported video.\nSupported formats: {', '.join(VID_EXT)}", parent=self.root)
+            return
+        if model_name not in VIDEO_COMPATIBLE_MODELS[mode]:
+            messagebox.showerror(
+                "Model / mode mismatch",
+                f"The model {model_name} is not compatible with {VIDEO_MODES[mode][0]}.\n\nChoose a model highlighted for this operation or select a compatible mode.",
+                parent=self.root
+            )
+            return
+        model_path = os.path.join(BASE_DIR, model_name)
+        if not os.path.isfile(model_path):
+            messagebox.showerror("Model file not found", f"Could not find the selected model:\n{model_path}", parent=self.root)
+            return
+        try:
+            confidence = max(0.10, min(0.90, float(self.conf.get())))
+        except (ValueError, tk.TclError):
+            confidence = 0.5
+
+        self.video_status_var.set(f"RUNNING  /  {VIDEO_MODES[mode][0]}  /  {os.path.basename(source)}")
+        self.root.update_idletasks()
+        self.root.withdraw()
+        try:
+            print(f"\n===== VIDEO STUDIO: {mode.upper()} | {model_name} | {source} =====")
+            show_video(source, mode, confidence, live=False, model_path=model_path)
+        except Exception as exc:
+            cv2.destroyAllWindows()
+            self.root.deiconify()
+            self.root.lift()
+            messagebox.showerror("Video analysis failed", f"{type(exc).__name__}: {exc}", parent=self.root)
+        finally:
+            if self.root.winfo_exists():
+                self.root.deiconify()
+                self.root.lift()
+                self.root.focus_force()
+                self.video_status_var.set(f"READY  /  {os.path.basename(source)}")
+            print("===== VIDEO STUDIO: END =====\n")
+
+    def return_to_main(self):
+        """الرجوع إلى لوحة التحكم دون إنهاء التطبيق أو إنشاء نافذة رئيسية جديدة."""
+        if self.video_page is not None and self.video_page.winfo_exists():
+            self.video_page.destroy()
+        self.video_page = None
+        if self.main_shell is not None and self.main_shell.winfo_exists():
+            self.main_shell.pack(fill="both", expand=True)
+        if hasattr(self, "status_var"):
+            self.status = "SYSTEM READY  /  SELECT A MODULE"
+            self.status_var.set(self.status)
+        self.root.lift()
+        self.root.focus_force()
+
+    # ========================== END VIDEO STUDIO UI ==========================
+
+    def build_workspace(self, parent, p):
+        outer = tk.Frame(parent, bg=p["bg"])
+        outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        self.canvas = tk.Canvas(outer, bg=p["bg"], highlightthickness=0, bd=0)
+        scroll = tk.Scrollbar(outer, orient="vertical", command=self.canvas.yview,
+                              bg=p["panel"], activebackground=p["accent"],
+                              troughcolor=p["bg"], highlightthickness=0, bd=0)
+        self.canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y", padx=(8, 0))
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.content = tk.Frame(self.canvas, bg=p["bg"])
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
+        self.content.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.columns = 0
+        self.canvas.bind("<Configure>", self.resize_workspace)
+        self.render_tasks(3)                                            #بداية بثلاثة أعمدة ثم ضبطها حسب عرض النافذة.
+
+    def render_tasks(self, columns):
+        if columns == self.columns:
+            return
+        self.columns = columns
+        p = THEMES[self.theme]
+        for child in self.content.winfo_children():
+            child.destroy()                                             #إعادة توزيع الأزرار عند تغير عرض النافذة.
+        for title, keys in SECTIONS:
+            head = tk.Frame(self.content, bg=p["bg"])
+            head.pack(fill="x", pady=(8, 3))
+            tk.Label(head, text=title, bg=p["bg"], fg=p["accent"],
+                     font=("Consolas", 10, "bold"), anchor="w").pack(side="left")
+            tk.Label(head, text=f"{len(keys):02d} MODULE{'S' if len(keys) != 1 else ''}",
+                     bg=p["bg"], fg=p["muted"], font=("Consolas", 8)).pack(side="right")
+            grid = tk.Frame(self.content, bg=p["bg"])
+            grid.pack(fill="x")
+            for col in range(columns):
+                grid.grid_columnconfigure(col, weight=1, uniform="task-col")
+            for i, key in enumerate(keys):
+                label, icon, subtitle = TASKS[key]
+                button = GlassButton(grid, label, icon, subtitle, p,
+                                     lambda k=key: self.run_task(k), height=70)
+                button.grid(row=i // columns, column=i % columns, sticky="nsew",
+                            padx=4, pady=3)
+
+    def resize_workspace(self, event):
+        self.canvas.itemconfigure(self.canvas_window, width=event.width)
+        columns = 4 if event.width >= 1280 else 3 if event.width >= 950 else 2
+        self.render_tasks(columns)                                      #أربعة أعمدة للشاشات العريضة وعمودان للشاشات الصغيرة.
+
+    def build_footer(self, parent, p):
+        foot = tk.Frame(parent, bg=p["panel"], padx=18, pady=8)
+        foot.pack(fill="x", side="bottom", padx=18, pady=(0, 12))
+        foot.columnconfigure(0, weight=1)
+        self.status_var = tk.StringVar(value=self.status)               #نص حالة قابل للتحديث داخل الواجهة.
+        tk.Label(foot, textvariable=self.status_var, bg=p["panel"], fg=p["green"],
+                 font=("Consolas", 9, "bold"), anchor="w").grid(row=0, column=0, sticky="ew")
+        tk.Label(foot, text="OPEN IMAGE WINDOWS  /  PRESS Q TO RETURN",
+                 bg=p["panel"], fg=p["muted"], font=("Consolas", 8)).grid(row=0, column=1, padx=15)
+        GlassButton(foot, "EXIT SYSTEM", "×", "", p, self.close,
+                    compact=True, width=160, height=42).grid(row=0, column=2, padx=(5, 0))
+
+    def mousewheel(self, event):
+        if hasattr(self, "canvas") and self.canvas.winfo_exists():
+            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    def scroll(self, amount):
+        if hasattr(self, "canvas") and self.canvas.winfo_exists():
+            self.canvas.yview_scroll(amount, "units")
+
+    def toggle_theme(self):
+        self.theme = "light" if self.theme == "dark" else "dark"        #تبديل القمر والشمس مع لوحة الألوان.
+        self.build_ui()                                                 #إعادة رسم كل العناصر مع الحفاظ على الإعدادات.
+
+    def run_task(self, key):
+        # مهام الفيديو المحلية تفتح صفحة اختيار الفيديو والنموذج داخل التطبيق نفسه.
+        if key in ("seg", "detvid", "trk", "vidstudio"):
+            self.open_video_selector(key)
+            return
+
+        label = TASKS[key][0]
+        try:
+            camera = int(self.camera.get())                             #قراءة رقم الكاميرا من شريط الإعدادات.
+            conf = max(0.10, min(0.90, float(self.conf.get())))
+        except (ValueError, tk.TclError):
+            messagebox.showerror("Invalid settings", "Check the webcam index and confidence value.", parent=self.root)
+            return
+        count = None
+        if key in ("web", "ext", "rec"):
+            title, prompt, default, limit = {
+                "web": ("Camera Frames", "How many frames should be captured?", 10, 100),
+                "ext": ("Video Frames", "How many frames should be extracted?", 10, 500),
+                "rec": ("Video Recording", "Recording duration in seconds?", 10, 300),
+            }[key]
+            count = simpledialog.askinteger(title, prompt, parent=self.root,
+                                            initialvalue=default, minvalue=1, maxvalue=limit)
+            if count is None:
+                return                                                  #الرجوع دون تشغيل المهمة عند إلغاء مربع الإدخال.
+        self.status = f"RUNNING  /  {label.upper()}"
+        self.status_var.set(self.status)
+        self.root.update_idletasks()
+        self.root.withdraw()                                            #إخفاء اللوحة أثناء فتح نوافذ OpenCV.
+        try:
+            print(f"\n===== START: {label} =====")
+            execute_task(key, camera, conf, count)
+        except Exception as exc:
+            cv2.destroyAllWindows()
+            self.root.deiconify()
+            messagebox.showerror("Task failed", f"{label}\n\n{type(exc).__name__}: {exc}", parent=self.root)
+        finally:
+            if self.root.winfo_exists():
+                self.root.deiconify()
+                self.root.lift()
+                self.root.focus_force()
+                self.status = f"READY  /  LAST TASK: {label.upper()}"
+                self.status_var.set(self.status)
+            print(f"===== END: {label} =====\n")
+
+    def close(self):
+        cv2.destroyAllWindows()                                         #إغلاق نوافذ OpenCV قبل إنهاء البرنامج.
+        self.root.destroy()
+
+def console_video_studio():
+    """نسخة نصية بسيطة لاستوديو الفيديو عند تعذر إنشاء الواجهة الرسومية."""
+    print("\nVideo Analysis Studio")
+    source = input("Enter a video path: ").strip().strip('"')
+    print("Modes: detect, segment, classify, track, pose, obb")
+    mode = input("Choose mode [detect]: ").strip().lower() or "detect"
+    if mode not in VIDEO_MODES:
+        print("Unknown mode; using detect.")
+        mode = "detect"
+    print("Models: " + ", ".join(VIDEO_MODELS))
+    model_name = input(f"Choose model [{VIDEO_DEFAULT_MODELS[mode]}]: ").strip() or VIDEO_DEFAULT_MODELS[mode]
+    if model_name not in VIDEO_MODELS:
+        print("Unknown model name.")
+        return
+    if model_name not in VIDEO_COMPATIBLE_MODELS[mode]:
+        print("The selected model is not compatible with the chosen mode.")
+        return
+    model_path = os.path.join(BASE_DIR, model_name)
+    if not os.path.isfile(model_path):
+        print(f"Model file not found: {model_path}")
+        return
+    if not source.lower().startswith(("http://", "https://")) and not os.path.isfile(source):
+        print(f"Video file not found: {source}")
+        return
+    show_video(source, mode, 0.5, model_path=model_path)
+
+
+def console_menu():
+    keys = list(TASKS)                                                  #إنشاء قائمة طرفية بديلة عند فشل الواجهة.
+    while True:
+        print("\n".join(f"{i + 1:02d}  {TASKS[key][0]}" for i, key in enumerate(keys)))
+        choice = input("Choose a task number or q to quit: ").strip().lower()
+        if choice == "q":
+            return
+        if not choice.isdigit() or not 1 <= int(choice) <= len(keys):
+            print("Invalid selection.")
+            continue
+        key = keys[int(choice) - 1]
+        count = None
+        if key in ("web", "ext", "rec"):
+            prompt, default, limit = {"web": ("Camera frames", 10, 100),
+                                     "ext": ("Video frames", 10, 500),
+                                     "rec": ("Recording seconds", 10, 300)}[key]
+            try:
+                count = min(limit, max(1, int(input(f"{prompt} [{default}]: ") or default)))
+            except ValueError:
+                count = default
+        try:
+            execute_task(key, WEBCAM, 0.5, count)
+        except Exception as exc:
+            print(f"[Task error] {type(exc).__name__}: {exc}")
+            cv2.destroyAllWindows()
+
+
+# ================================ STARTUP ================================
+if __name__ == "__main__":
+    root = None
+    try:
+        root = tk.Tk()                                                  #إنشاء النافذة الرئيسية.
+        app = YoloControlPanel(root)                                    #بناء لوحة تحكم NEXUS.
+        root.mainloop()                                                 #بدء حلقة أحداث الواجهة الرسومية.
+    except Exception as exc:
+        print(f"[GUI error] {type(exc).__name__}: {exc}")
+        if root is not None:
+            try:
+                root.destroy()
+            except tk.TclError:
+                pass
+        print("Starting console fallback menu.")
+        console_menu()
